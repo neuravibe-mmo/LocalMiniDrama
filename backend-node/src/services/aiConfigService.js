@@ -109,6 +109,9 @@ function createConfig(db, log, req) {
         endpoint = '/videos';
         queryEndpoint = '/videos/{taskId}';
       }
+    } else if (p === 'cheap_seedance2' && st === 'video') {
+      endpoint = '/v1/videos';
+      queryEndpoint = '/v1/videos/{taskId}';
     }
   }
   const defaultModel = req.default_model != null ? String(req.default_model).trim() || null : null;

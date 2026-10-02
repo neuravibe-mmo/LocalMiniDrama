@@ -103,9 +103,11 @@ function resolveVideosDir(storagePath, projectSubdir) {
 
 /**
  * 将远程 video_url 下载到本地
+ * @param {object} [options]
+ * @param {string} [options.apiKey] 需要鉴权下载时传入（如 cheap_seedance2）
  * @returns {string|null} 相对 storage 根的路径，如 projects/.../videos/vg_1_xxx.mp4；无工程时为 videos/...
  */
-async function downloadVideoToLocal(storagePath, videoUrl, videoGenId, log, projectSubdir = null) {
+async function downloadVideoToLocal(storagePath, videoUrl, videoGenId, log, projectSubdir = null, options = null) {
   if (!videoUrl || typeof videoUrl !== 'string') return null;
   const { dir, relPrefix } = resolveVideosDir(storagePath, projectSubdir);
   try {
@@ -113,9 +115,14 @@ async function downloadVideoToLocal(storagePath, videoUrl, videoGenId, log, proj
     const ext = (videoUrl.split('?')[0].match(/\.(mp4|webm|mov)$/i) || [])[1] || 'mp4';
     const name = `vg_${videoGenId}_${randomUUID().slice(0, 8)}.${ext}`;
     const filePath = path.join(dir, name);
-    const res = await fetch(videoUrl, { method: 'GET' });
+    const headers = {};
+    const apiKey = options && options.apiKey != null ? String(options.apiKey).trim() : '';
+    if (apiKey) {
+      headers.Authorization = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    }
+    const res = await fetch(videoUrl, { method: 'GET', headers });
     if (!res.ok) {
-      log.warn('Download video failed', { status: res.status, videoGenId });
+      log.warn('Download video failed', { status: res.status, videoGenId, auth: !!apiKey });
       return null;
     }
     const buf = Buffer.from(await res.arrayBuffer());
@@ -218,16 +225,37 @@ function resolveStoragePath(cfg) {
     : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
 }
 
-async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, videoUrl, logLabel) {
+async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, videoUrl, logLabel, aiConfig = null) {
   const now = new Date().toISOString();
   let localPath = null;
+  const requireAuthDownload = videoClient.isCheapSeedance2Provider(aiConfig?.provider || row?.provider);
+  const downloadOpts = requireAuthDownload && aiConfig?.api_key
+    ? { apiKey: aiConfig.api_key }
+    : null;
   try {
     const cfg = require('../config').loadConfig();
     const storagePath = resolveStoragePath(cfg);
     const projectSubdir = storageLayout.getProjectStorageSubdir(db, row.drama_id);
-    localPath = await downloadVideoToLocal(storagePath, videoUrl, videoGenId, log, projectSubdir);
+    localPath = await downloadVideoToLocal(
+      storagePath,
+      videoUrl,
+      videoGenId,
+      log,
+      projectSubdir,
+      downloadOpts
+    );
     maybeNormalizeVideoAfterDownload(storagePath, localPath, rowForAspect, videoGenId, log);
   } catch (_) {}
+
+  // 低价 Seedance2：成片 URL 需鉴权，本地下载失败则不可标为可播成功
+  if (requireAuthDownload && !localPath) {
+    const errMsg = '成片鉴权下载失败（请检查 API Key，或稍后重试继续查询）';
+    log.warn('cheap_seedance2 auth download failed', { videoGenId, video_url: videoUrl });
+    setVideoGenFailed(db, videoGenId, errMsg, now);
+    if (row.task_id) taskService.updateTaskError(db, row.task_id, errMsg);
+    return { ok: false, error: errMsg };
+  }
+
   try {
     db.prepare(
       'UPDATE video_generations SET status = ?, video_url = ?, local_path = ?, completed_at = ?, updated_at = ? WHERE id = ?'
@@ -262,6 +290,7 @@ async function finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, v
     video_url: videoUrl,
     local_path: localPath,
   });
+  return { ok: true, local_path: localPath };
 }
 
 async function pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspect, providerTaskId, config) {
@@ -285,7 +314,7 @@ async function pollProviderTaskAndFinalize(db, log, videoGenId, row, rowForAspec
   const now = new Date().toISOString();
   const polledVideo = resolveRemoteVideoUrl(pollResult.video_url, pollResult.error);
   if (polledVideo.ok) {
-    await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, polledVideo.video_url, 'after poll');
+    await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, polledVideo.video_url, 'after poll', config);
   } else {
     setVideoGenFailed(db, videoGenId, polledVideo.error, now);
     if (row.task_id) taskService.updateTaskError(db, row.task_id, polledVideo.error);
@@ -538,7 +567,7 @@ async function processVideoGeneration(db, log, videoGenId) {
     }
     const directVideo = resolveRemoteVideoUrl(result.video_url, result.error);
     if (directVideo.ok) {
-      await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, directVideo.video_url, '');
+      await finalizeSuccessfulVideo(db, log, videoGenId, row, rowForAspect, directVideo.video_url, '', config);
       return;
     }
     if (result.video_url) {

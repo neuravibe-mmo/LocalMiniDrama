@@ -32,6 +32,10 @@
                 一键配置通义
                 <span class="one-key-not-recommended">不推荐</span>
               </el-button>
+              <el-button type="warning" plain @click="openOneKeyCheapSeedance2">
+                <el-icon><MagicStick /></el-icon>
+                一键配置低价 Seedance2
+              </el-button>
             </div>
             <div class="actions-right">
               <transition name="fade-slide">
@@ -315,6 +319,41 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="form.service_type === 'video'">
+          <template #label>
+            <span class="form-label-tip">全能多图
+              <el-tooltip placement="top" popper-class="cfg-tip-popper">
+                <template #content>
+                  <div class="cfg-tip-content">
+                    勾选后，全能模式分镜生视频会走多参考图（场景+角色+道具），不再弹出「模型不匹配」降级提示。<br>
+                    「低价 Seedance2」默认开启；其他厂商仅在确认上游支持多图参考时勾选。
+                  </div>
+                </template>
+                <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <el-switch
+            v-model="form.supports_universal_omni"
+            active-text="确认支持全能模式（多图参考）"
+            inactive-text="未确认（全能将降级）"
+          />
+        </el-form-item>
+        <el-alert
+          v-if="form.provider === 'cheap_seedance2'"
+          type="success"
+          :closable="false"
+          show-icon
+          class="cheap-seedance2-tip"
+        >
+          <template #title>
+            <span>
+              适合练手与流水剧制作，价格便宜，一次约 1 元，不按秒计费。
+              官网：
+              <a href="https://workbench.ohmybb.xyz/" target="_blank" rel="noopener noreferrer" class="cheap-seedance2-link">workbench.ohmybb.xyz</a>
+            </span>
+          </template>
+        </el-alert>
         <!-- 接口规范：仅图片/分镜/视频类型显示，预设厂商自动填充；自定义厂商必选 -->
         <el-form-item v-if="form.service_type !== 'text' && form.service_type !== 'tts' && form.service_type !== 'jimeng2_character_auth'">
           <template #label>
@@ -377,6 +416,18 @@
 
             <div class="ph-section-title" style="margin-top:16px">🎬 视频 协议</div>
             <el-collapse accordion>
+              <el-collapse-item name="cheap-seedance2-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> 低价 Seedance2 — Sora 兼容（ohmybb）</template>
+                <div class="ph-body">
+                  <b>适用场景：</b>练手、流水剧制作；按次计费（约 1 元/次），不按秒计费。<br>
+                  <b>厂商：</b>选择「低价 Seedance2」即可自动填好 Base URL / 协议 / 模型，并默认勾选「确认支持全能模式」。<br>
+                  <b>Base URL：</b><code>https://workbench.ohmybb.xyz/api/openai</code><br>
+                  <b>接口规范：</b><code>sora</code>（multipart/form-data；多图参考时用 JSON <code>images</code> 数组，最多 9 张）<br>
+                  <b>默认 Endpoint：</b><code>POST /v1/videos</code>，查询 <code>GET /v1/videos/{taskId}</code>；成片需带 Key 下载 <code>/v1/videos/{id}/content</code>（本系统会自动处理）。<br>
+                  <b>模型：</b><code>wb-seedance-2-fast</code>（5/10/15 秒）、<code>wb-seedance-2.5</code>（5/10 秒）<br>
+                  <b>官网 / 充值：</b><a href="https://workbench.ohmybb.xyz/" target="_blank" rel="noopener noreferrer">https://workbench.ohmybb.xyz/</a>
+                </div>
+              </el-collapse-item>
               <el-collapse-item name="openai-vid">
                 <template #title><span class="ph-tag ph-tag-vid">视频</span> OpenAI 兼容 — content 数组格式</template>
                 <div class="ph-body">
@@ -856,6 +907,51 @@ input_reference = (图片文件，可选)</pre>
       </template>
     </el-dialog>
 
+    <!-- 一键配置低价 Seedance2 -->
+    <el-dialog
+      v-model="oneKeyCheapSeedance2Visible"
+      title="一键配置低价 Seedance2"
+      width="520px"
+      :close-on-click-modal="false"
+      @closed="oneKeyCheapSeedance2Key = ''"
+    >
+      <div class="one-key-help">
+        <div class="one-key-section">
+          <div class="one-key-section-title">📋 将自动创建以下配置</div>
+          <ul class="one-key-list">
+            <li><b>视频生成</b>：低价 Seedance2（wb-seedance-2-fast / wb-seedance-2.5）— 练手与流水剧，约 1 元/次，不按秒计费</li>
+          </ul>
+          <p class="one-key-note">会设为视频服务的默认配置；Base URL / 协议 / 端点自动填好。</p>
+        </div>
+        <div class="one-key-section">
+          <div class="one-key-section-title">🔑 如何申请 API Key</div>
+          <ol class="one-key-list">
+            <li>打开官网：<a href="https://workbench.ohmybb.xyz/" target="_blank" rel="noopener noreferrer" class="one-key-link">workbench.ohmybb.xyz</a></li>
+            <li>登录后在左侧栏底部进入「API 密钥」，创建密钥（格式：<code>vw_xxxxxxxx</code>）</li>
+            <li>密钥只在创建时显示一次，请妥善保存后填入下方</li>
+          </ol>
+          <p class="one-key-note">💡 接口文档：<a href="https://workbench.ohmybb.xyz/docs/api" target="_blank" rel="noopener noreferrer" class="one-key-link">workbench.ohmybb.xyz/docs/api</a></p>
+        </div>
+      </div>
+      <el-form label-width="0" style="margin-top: 8px">
+        <el-form-item>
+          <el-input
+            v-model="oneKeyCheapSeedance2Key"
+            type="password"
+            placeholder="请输入 API Key，格式：vw_xxxxxxxx"
+            show-password-on="click"
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="oneKeyCheapSeedance2Visible = false">取消</el-button>
+        <el-button type="success" :loading="oneKeyCheapSeedance2Saving" :disabled="!oneKeyCheapSeedance2Key.trim()" @click="submitOneKeyCheapSeedance2">
+          确定，一键创建配置
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 一键配置通义 -->
     <el-dialog
       v-model="oneKeyTongyiVisible"
@@ -1187,6 +1283,8 @@ const form = ref({
   deepseek_reasoning_effort: 'high',
   priority: 0,
   is_default: false,
+  // 确认该视频配置支持全能模式多图参考（存 settings.supports_universal_omni）
+  supports_universal_omni: false,
   // 可灵 Omni 官方 AK/SK（存 settings，后端生成 JWT）
   kling_access_key: '',
   kling_secret_key: '',
@@ -1286,6 +1384,9 @@ const testError = ref('')
 const oneKeyTongyiVisible = ref(false)
 const oneKeyTongyiKey = ref('')
 const oneKeyTongyiSaving = ref(false)
+const oneKeyCheapSeedance2Visible = ref(false)
+const oneKeyCheapSeedance2Key = ref('')
+const oneKeyCheapSeedance2Saving = ref(false)
 const oneKeyVolcVisible = ref(false)
 const oneKeyVolcKey = ref('')
 const oneKeyVolcSaving = ref(false)
@@ -1326,6 +1427,11 @@ const providerConfigs = {
     { id: 'agnes', name: 'Agnes AI', models: ['agnes-image-2.5-flash', 'agnes-image-2.1-flash', 'agnes-image-2.0-flash'] }
   ],
   video: [
+    {
+      id: 'cheap_seedance2',
+      name: '低价 Seedance2',
+      models: ['wb-seedance-2-fast', 'wb-seedance-2.5'],
+    },
     { id: 'klingai', name: '可灵官方 Omni (api-beijing.klingai.com)', models: ['kling-video-o1', 'kling-v3-omni'] },
     { id: 'ffir', name: '飞儿API / 可灵 Omni-Video (ffir.cn)', models: ['kling-video-o1', 'kling-v3-omni'] },
     { id: 'kling', name: '可灵 Kling', models: ['kling-omni-video', 'kling-video', 'kling-motion-control'] },
@@ -1381,6 +1487,7 @@ const providerProtocolMap = {
   minimax: 'openai',
   minimax_h3: 'minimax_h3',
   openai: 'openai',
+  cheap_seedance2: 'sora',
   chatfire: 'openai',
   qwen: 'openai',
   deepseek: 'openai',
@@ -1398,6 +1505,7 @@ function getBaseUrlForProvider(provider) {
   if (p === 'minimax') return 'https://api.minimaxi.com/v1'
   if (p === 'volces' || p === 'volcengine') return 'https://ark.cn-beijing.volces.com/api/v3'
   if (p === 'openai') return 'https://api.openai.com/v1'
+  if (p === 'cheap_seedance2') return 'https://workbench.ohmybb.xyz/api/openai'
   if (p === 'deepseek') return 'https://api.deepseek.com'
   if (p === 'dashscope') return 'https://dashscope.aliyuncs.com'
   if (p === 'qwen_image') return 'https://dashscope.aliyuncs.com'
@@ -1651,6 +1759,12 @@ function onProviderChange(providerId) {
     form.value.endpoint = ''
     form.value.query_endpoint = ''
   }
+  if (st === 'video' && providerId === 'cheap_seedance2') {
+    form.value.api_protocol = 'sora'
+    form.value.endpoint = '/v1/videos'
+    form.value.query_endpoint = '/v1/videos/{taskId}'
+    form.value.supports_universal_omni = true
+  }
   if (st === 'video' && (providerId === 'ffir' || providerId === 'klingai')) {
     if (providerId === 'ffir') {
       form.value.endpoint = '/kling/v1/videos/omni-video'
@@ -1687,6 +1801,21 @@ const TONGYI_CONFIGS = [
   { service_type: 'image', name: '通义千问 文本生图', base_url: 'https://dashscope.aliyuncs.com', provider: 'qwen_image', model: ['qwen-image-max', 'qwen-image-plus', 'qwen-image'] },
   { service_type: 'storyboard_image', name: '通义万象 分镜图', base_url: 'https://dashscope.aliyuncs.com', provider: 'dashscope', model: ['wan2.6-image'] },
   { service_type: 'video', name: '通义万相', base_url: 'https://dashscope.aliyuncs.com', provider: 'dashscope', model: ['wan2.2-kf2v-flash'] }
+]
+
+/** 低价 Seedance2 一键配置（仅视频） */
+const CHEAP_SEEDANCE2_CONFIGS = [
+  {
+    service_type: 'video',
+    name: '低价 Seedance2 视频',
+    provider: 'cheap_seedance2',
+    api_protocol: 'sora',
+    base_url: 'https://workbench.ohmybb.xyz/api/openai',
+    endpoint: '/v1/videos',
+    query_endpoint: '/v1/videos/{taskId}',
+    model: ['wb-seedance-2-fast', 'wb-seedance-2.5'],
+    settings: JSON.stringify({ supports_universal_omni: true }),
+  },
 ]
 
 /** 火山引擎一键配置用 */
@@ -1764,6 +1893,7 @@ function resetForm() {
     deepseek_reasoning_effort: 'high',
     priority: 0,
     is_default: true,  // 新增时默认勾选「设为默认」，便于理解当前会使用哪条配置
+    supports_universal_omni: false,
     voice_id: '',
     group_id: '',
     kling_access_key: '',
@@ -1789,6 +1919,7 @@ function openEdit(row) {
   let kling_access_key = ''
   let kling_secret_key = ''
   let kling_secret_key_base64 = false
+  let supports_universal_omni = false
   const deepseekSettings = resolveDeepSeekFormSettings(row)
   if (row.settings) {
     try {
@@ -1802,7 +1933,15 @@ function openEdit(row) {
         kling_secret_key = s.kling_secret_key || ''
         kling_secret_key_base64 = !!s.kling_secret_key_base64
       }
+      if (row.service_type === 'video') {
+        supports_universal_omni = !!(s.supports_universal_omni === true || s.supports_universal_omni === 1 || s.supports_universal_omni === 'true')
+        if (String(row.provider || '').toLowerCase() === 'cheap_seedance2' && s.supports_universal_omni == null) {
+          supports_universal_omni = true
+        }
+      }
     } catch (_) {}
+  } else if (row.service_type === 'video' && String(row.provider || '').toLowerCase() === 'cheap_seedance2') {
+    supports_universal_omni = true
   }
   form.value = {
     service_type: row.service_type,
@@ -1819,6 +1958,7 @@ function openEdit(row) {
     deepseek_reasoning_effort: deepseekSettings.effort,
     priority: row.priority ?? 0,
     is_default: !!row.is_default,
+    supports_universal_omni,
     voice_id,
     group_id,
     kling_access_key,
@@ -1839,14 +1979,14 @@ async function submit() {
     const defaultModel = form.value.default_model && modelList.includes(form.value.default_model)
       ? form.value.default_model
       : modelList[0] || null
-    // TTS / 可灵 Omni 官方 AKSK / DeepSeek V4 参数打包进 settings
+    // TTS / 可灵 Omni 官方 AKSK / DeepSeek V4 / 视频全能多图开关 → settings
     let settings = undefined
     if (form.value.service_type === 'tts') {
       const s = {}
       if (form.value.voice_id) s.voice_id = form.value.voice_id
       if (form.value.group_id) s.group_id = form.value.group_id
       settings = Object.keys(s).length ? JSON.stringify(s) : null
-    } else if (form.value.service_type === 'video' && form.value.api_protocol === 'kling_omni') {
+    } else if (form.value.service_type === 'video') {
       let baseS = {}
       if (editingId.value) {
         const prev = list.value.find((r) => r.id === editingId.value)
@@ -1856,12 +1996,16 @@ async function submit() {
           } catch (_) {}
         }
       }
-      if ((form.value.kling_access_key || '').trim()) baseS.kling_access_key = form.value.kling_access_key.trim()
-      else delete baseS.kling_access_key
-      if ((form.value.kling_secret_key || '').trim()) baseS.kling_secret_key = form.value.kling_secret_key.trim()
-      else delete baseS.kling_secret_key
-      if (form.value.kling_secret_key_base64) baseS.kling_secret_key_base64 = true
-      else delete baseS.kling_secret_key_base64
+      if (form.value.api_protocol === 'kling_omni') {
+        if ((form.value.kling_access_key || '').trim()) baseS.kling_access_key = form.value.kling_access_key.trim()
+        else delete baseS.kling_access_key
+        if ((form.value.kling_secret_key || '').trim()) baseS.kling_secret_key = form.value.kling_secret_key.trim()
+        else delete baseS.kling_secret_key
+        if (form.value.kling_secret_key_base64) baseS.kling_secret_key_base64 = true
+        else delete baseS.kling_secret_key_base64
+      }
+      if (form.value.supports_universal_omni) baseS.supports_universal_omni = true
+      else delete baseS.supports_universal_omni
       settings = Object.keys(baseS).length ? JSON.stringify(baseS) : null
     } else if (isDeepSeekOfficialForm.value) {
       const prev = editingId.value ? list.value.find((r) => r.id === editingId.value) : null
@@ -2071,6 +2215,44 @@ async function submitOneKeyTongyi() {
     // 错误已由 request 统一提示
   } finally {
     oneKeyTongyiSaving.value = false
+  }
+}
+
+function openOneKeyCheapSeedance2() {
+  oneKeyCheapSeedance2Key.value = ''
+  oneKeyCheapSeedance2Visible.value = true
+}
+
+async function submitOneKeyCheapSeedance2() {
+  const apiKey = oneKeyCheapSeedance2Key.value.trim()
+  if (!apiKey) return
+  oneKeyCheapSeedance2Saving.value = true
+  try {
+    for (const cfg of CHEAP_SEEDANCE2_CONFIGS) {
+      const models = cfg.model || []
+      await aiAPI.create({
+        service_type: cfg.service_type,
+        name: cfg.name,
+        provider: cfg.provider,
+        api_protocol: cfg.api_protocol || '',
+        base_url: cfg.base_url,
+        api_key: apiKey,
+        model: models,
+        default_model: models[0] || null,
+        endpoint: cfg.endpoint || '',
+        query_endpoint: cfg.query_endpoint || '',
+        priority: 10,
+        is_default: true,
+        settings: cfg.settings || undefined,
+      })
+    }
+    ElMessage.success('已创建低价 Seedance2 视频配置')
+    oneKeyCheapSeedance2Visible.value = false
+    await loadList()
+  } catch (_) {
+    // 错误已由 request 统一提示
+  } finally {
+    oneKeyCheapSeedance2Saving.value = false
   }
 }
 
@@ -2494,6 +2676,17 @@ code {
   background: #f0f9eb;
   color: #67c23a;
   border: 1px solid #b3e19d;
+}
+.cheap-seedance2-tip {
+  margin: 0 0 16px;
+}
+.cheap-seedance2-link {
+  color: #409eff;
+  text-decoration: underline;
+  font-weight: 600;
+}
+.cheap-seedance2-link:hover {
+  color: #337ecc;
 }
 .protocol-help .ph-body {
   font-size: 13px;

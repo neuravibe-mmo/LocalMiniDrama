@@ -30,10 +30,72 @@ function inferVideoProtocol(provider) {
   if (p === 'ffir') return 'kling_omni';
   if (p === 'kling' || p === 'klingai') return 'kling';
   if (p === 'jimeng_ai_api') return 'jimeng_ai_api';
+  if (p === 'cheap_seedance2') return 'sora';
   if (p === 'xai' || p === 'grok') return 'xai';
   if (p === 'agnes') return 'agnes';
   if (p === 'minimax_h3') return 'minimax_h3';
   return 'openai';
+}
+
+function isCheapSeedance2Provider(provider) {
+  return String(provider || '').trim().toLowerCase() === 'cheap_seedance2';
+}
+
+/** AI 配置 settings.supports_universal_omni 或低价 Seedance2 */
+function configSupportsUniversalOmni(config) {
+  if (isCheapSeedance2Provider(config?.provider)) return true;
+  let s = {};
+  try {
+    if (typeof config?.settings === 'string') s = JSON.parse(config.settings || '{}') || {};
+    else if (config?.settings && typeof config.settings === 'object') s = config.settings;
+  } catch (_) {
+    s = {};
+  }
+  return s.supports_universal_omni === true || s.supports_universal_omni === 1 || s.supports_universal_omni === 'true';
+}
+
+/**
+ * ohmybb Seedance 时长档：fast 5/10/15，2.5 为 5/10。就近映射。
+ * @returns {string} seconds 字符串
+ */
+function normalizeCheapSeedance2Duration(duration, model) {
+  const modelLower = String(model || '').toLowerCase();
+  const is25 = /wb-seedance-2\.5|seedance-2\.5|seedance2\.5/.test(modelLower);
+  const allowed = is25 ? [5, 10] : [5, 10, 15];
+  const raw = duration == null || duration === '' ? NaN : Number(duration);
+  let target;
+  if (!Number.isFinite(raw) || raw <= 0) {
+    target = 10;
+  } else if (raw <= 5) {
+    target = 5;
+  } else if (raw <= 10) {
+    target = 10;
+  } else {
+    target = is25 ? 10 : 15;
+  }
+  if (!allowed.includes(target)) target = allowed[allowed.length - 1];
+  return String(target);
+}
+
+/** ohmybb 支持的 size：1280x720 / 720x1280 / 1024x1024 / 960x720 / 720x960 */
+function normalizeCheapSeedance2Size(aspectRatio) {
+  const sizeMap = {
+    '16:9': '1280x720',
+    '9:16': '720x1280',
+    '1:1': '1024x1024',
+    '4:3': '960x720',
+    '3:4': '720x960',
+  };
+  return sizeMap[String(aspectRatio || '').trim()] || '1280x720';
+}
+
+/** 完成态无直链时，拼 Sora 兼容 content 下载地址 */
+function buildCheapSeedance2ContentUrl(config, taskId) {
+  const id = String(taskId || '').trim();
+  if (!id) return null;
+  const base = String(config?.base_url || '').replace(/\/$/, '');
+  if (!base) return null;
+  return `${base}/v1/videos/${encodeURIComponent(id)}/content`;
 }
 
 /** 官方模型 ID：MiniMax-H3（Video Generation V2） */
@@ -2794,30 +2856,156 @@ async function callAgnesVideoApi(db, config, log, opts) {
 
 /**
  * Sora (api_protocol = 'sora')
- * multipart/form-data: model, prompt, seconds, size, input_reference
+ * 默认 multipart：model, prompt, seconds, size, input_reference
+ * 低价 Seedance2 多图：JSON + images[]（最多 9 张，https 或 data URL）
  */
+async function resolveSoraImageToDataUrl(rawUrl, storage_local_path, log, video_gen_id, index) {
+  const raw = String(rawUrl || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('data:')) return raw;
+  if (/localhost|127\.0\.0\.1/i.test(raw) && storage_local_path) {
+    try {
+      const afterStatic = raw.split('/static/')[1];
+      if (afterStatic) {
+        const localFile = path.join(storage_local_path, afterStatic.replace(/^\//, ''));
+        if (fs.existsSync(localFile)) {
+          const buf = fs.readFileSync(localFile);
+          const ext = path.extname(localFile).toLowerCase();
+          const mimeMap = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+          const mime = mimeMap[ext] || 'image/jpeg';
+          return `data:${mime};base64,${buf.toString('base64')}`;
+        }
+      }
+    } catch (e) {
+      log.warn('[Sora] 本地参考图读取失败', { index, error: e.message, video_gen_id });
+    }
+  }
+  if (/^https?:\/\//i.test(raw) && !/localhost|127\.0\.0\.1/i.test(raw)) {
+    return raw;
+  }
+  try {
+    const dlRes = await fetch(raw);
+    if (!dlRes.ok) {
+      log.warn('[Sora] 参考图下载失败', { index, status: dlRes.status, video_gen_id });
+      return null;
+    }
+    const ct = (dlRes.headers.get('content-type') || '').split(';')[0].trim() || 'image/jpeg';
+    const buf = Buffer.from(await dlRes.arrayBuffer());
+    return `data:${ct};base64,${buf.toString('base64')}`;
+  } catch (e) {
+    log.warn('[Sora] 参考图拉取异常', { index, error: e.message, video_gen_id });
+    return null;
+  }
+}
+
 async function callSoraVideoApi(config, log, opts) {
-  const { prompt, model, duration, aspect_ratio, image_url, storage_local_path, video_gen_id } = opts;
+  const {
+    prompt,
+    model,
+    duration,
+    aspect_ratio,
+    image_url,
+    reference_urls,
+    storage_local_path,
+    video_gen_id,
+  } = opts;
+  const cheapSeedance = isCheapSeedance2Provider(config.provider);
 
   const base = (config.base_url || '').replace(/\/$/, '');
   let ep = config.endpoint || '/v1/videos';
   if (!ep.startsWith('/')) ep = '/' + ep;
   const url = base + ep;
 
-  // seconds ?????? 4 / 8 / 12?????
-  const rawSec = duration ? Number(duration) : 4;
-  const dur = rawSec <= 4 ? '4' : rawSec <= 8 ? '8' : '12';
+  // seconds：通用 Sora 为 4/8/12；低价 Seedance2 为 5/10/15
+  let dur;
+  if (cheapSeedance) {
+    dur = normalizeCheapSeedance2Duration(duration, model || getModelFromConfig(config));
+  } else {
+    const rawSec = duration ? Number(duration) : 4;
+    dur = rawSec <= 4 ? '4' : rawSec <= 8 ? '8' : '12';
+  }
 
-  // aspect_ratio ? size???? 4 ?????720x1280 / 1280x720 / 1024x1792 / 1792x1024?
-  const sizeMap = {
-    '9:16': '720x1280',  // ????
-    '3:4':  '1024x1792', // ????
-    '1:1':  '720x1280',  // ????????
-    '16:9': '1280x720',  // ????
-    '4:3':  '1280x720',  // ????
-    '21:9': '1792x1024', // ????
-  };
-  const size = sizeMap[aspect_ratio || ''] || '720x1280';
+  // aspect_ratio → size
+  let size;
+  if (cheapSeedance) {
+    size = normalizeCheapSeedance2Size(aspect_ratio);
+  } else {
+    const sizeMap = {
+      '9:16': '720x1280',
+      '3:4': '1024x1792',
+      '1:1': '720x1280',
+      '16:9': '1280x720',
+      '4:3': '1280x720',
+      '21:9': '1792x1024',
+    };
+    size = sizeMap[aspect_ratio || ''] || '720x1280';
+  }
+
+  // 支持全能多图：低价 Seedance2，或配置勾选 supports_universal_omni → JSON images[]（最多 9）
+  const refList = Array.isArray(reference_urls) ? reference_urls.filter(Boolean).map(String) : [];
+  const useOmniMultiImages = configSupportsUniversalOmni(config) && (refList.length > 0 || (image_url || '').trim());
+  if (useOmniMultiImages) {
+    const rawList = (refList.length > 0 ? refList : [(image_url || '').trim()]).slice(0, 9);
+    const images = [];
+    for (let i = 0; i < rawList.length; i++) {
+      const resolved = await resolveSoraImageToDataUrl(rawList[i], storage_local_path, log, video_gen_id, i);
+      if (resolved) images.push(resolved);
+    }
+    const body = {
+      model: model || getModelFromConfig(config) || (cheapSeedance ? 'wb-seedance-2-fast' : 'sora-2'),
+      prompt: prompt || '',
+      seconds: cheapSeedance ? (Number(dur) || 10) : dur,
+      size,
+      ...(images.length ? { images } : {}),
+    };
+    log.info('[Sora][omni-multi] JSON 多图提交', {
+      url,
+      provider: config.provider,
+      model: body.model,
+      seconds: body.seconds,
+      size: body.size,
+      image_count: images.length,
+      video_gen_id,
+    });
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + (config.api_key || ''),
+      },
+      body: JSON.stringify(body),
+    });
+    const raw = await res.text();
+    log.info('[Sora][omni-multi] raw response', { status: res.status, raw: raw.slice(0, 1000), video_gen_id });
+    if (!res.ok) {
+      let errMsg = 'Sora 多图创建失败: ' + res.status;
+      try {
+        const errJson = JSON.parse(raw);
+        const msg = errJson.error?.message || errJson.message || errJson.error;
+        if (msg) errMsg += ' - ' + (typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 200));
+      } catch (_) {
+        if (raw) errMsg += ' - ' + raw.slice(0, 200);
+      }
+      return { error: errMsg };
+    }
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      return { error: 'Sora 多图响应非 JSON: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
+    }
+    const directUrl = pickProxyVideoUrl(data);
+    if (directUrl) {
+      log.info('[Sora][omni-multi] 直接返回 URL', { video_url: directUrl, video_gen_id });
+      return { video_url: directUrl };
+    }
+    const taskId = data.id || data.task_id || data.request_id || data.data?.id || data.data?.task_id;
+    if (taskId) {
+      log.info('[Sora][omni-multi] 返回 task_id', { task_id: taskId, status: data.status, video_gen_id });
+      return { task_id: String(taskId), status: data.status || 'processing' };
+    }
+    return { error: 'Sora 多图未返回 task_id 或 video_url: ' + JSON.stringify(data).slice(0, 300) };
+  }
 
   // ?? ????? Buffer ????????????????????????????????????????????
   let imageBuffer = null;
@@ -4028,6 +4216,7 @@ async function callVideoApi(db, log, opts) {
       duration: opts.duration,
       aspect_ratio,
       image_url: opts.image_url,
+      reference_urls: opts.reference_urls,
       resolution: opts.resolution,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
@@ -4445,12 +4634,37 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
           return { error: String(msg).slice(0, 500) };
         }
         // succeeded / completed / done ? ??? URL
-        const videoUrl = pickProxyVideoUrl(data);
+        let videoUrl = pickProxyVideoUrl(data);
+        // 相对路径（如 /api/openai/v1/videos/.../content）拼到 base_url 源站
+        if (!videoUrl) {
+          const rawVu =
+            (typeof data.video_url === 'string' && data.video_url.trim()) ||
+            (typeof data.data?.video_url === 'string' && data.data.video_url.trim()) ||
+            '';
+          if (rawVu.startsWith('/')) {
+            try {
+              videoUrl = new URL(config.base_url || '').origin + rawVu;
+            } catch (_) {}
+          } else if (isPlausibleHttpVideoUrl(rawVu)) {
+            videoUrl = rawVu.trim();
+          }
+        }
         if (videoUrl && isPlausibleHttpVideoUrl(videoUrl)) {
           log.info('[Sora poll] ????', { video_gen_id: videoGenId, video_url: videoUrl });
           return { video_url: videoUrl };
         }
         if (status === 'succeeded' || status === 'completed' || status === 'done') {
+          // 低价 Seedance2：完成态可能无直链，需带鉴权拉 /content
+          if (isCheapSeedance2Provider(provider)) {
+            const contentUrl = buildCheapSeedance2ContentUrl(config, data.id || pollTaskId);
+            if (contentUrl) {
+              log.info('[Sora poll] cheap_seedance2 使用 content 地址', {
+                video_gen_id: videoGenId,
+                video_url: contentUrl,
+              });
+              return { video_url: contentUrl };
+            }
+          }
           log.warn('[Sora poll] ????????? video_url', { video_gen_id: videoGenId, data: JSON.stringify(data).slice(0, 500) });
           return { error: 'Sora ?????????????????: ' + JSON.stringify(data).slice(0, 300) };
         }
@@ -4650,4 +4864,9 @@ module.exports = {
   extractMinimaxH3VideoUrl,
   normalizeMinimaxH3Duration,
   normalizeMinimaxH3Resolution,
+  isCheapSeedance2Provider,
+  configSupportsUniversalOmni,
+  normalizeCheapSeedance2Duration,
+  normalizeCheapSeedance2Size,
+  buildCheapSeedance2ContentUrl,
 };
